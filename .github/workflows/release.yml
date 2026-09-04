@@ -1,0 +1,34 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Package plugin
+        run: |
+          zip -r "/tmp/Altcha-${GITHUB_REF_NAME}.zip" Altcha \
+            -x "Altcha/lib/.git/*" \
+            -x "Altcha/lib/.github/*" \
+            -x "Altcha/lib/tests/*" \
+            -x "Altcha/lib/examples/*"
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Altcha $GITHUB_REF_NAME" \
+            --generate-notes \
+            "/tmp/Altcha-${GITHUB_REF_NAME}.zip"
