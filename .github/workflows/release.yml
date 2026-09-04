@@ -19,10 +19,19 @@ jobs:
       - name: Package plugin
         run: |
           zip -r "/tmp/Altcha-${GITHUB_REF_NAME}.zip" Altcha \
+            -x "Altcha/lib/.git" \
             -x "Altcha/lib/.git/*" \
             -x "Altcha/lib/.github/*" \
+            -x "Altcha/lib/.gitattributes" \
+            -x "Altcha/lib/.gitignore" \
+            -x "Altcha/lib/.php-cs-fixer.dist.php" \
             -x "Altcha/lib/tests/*" \
-            -x "Altcha/lib/examples/*"
+            -x "Altcha/lib/examples/*" \
+            -x "Altcha/lib/phpstan.neon" \
+            -x "Altcha/lib/phpstan-baseline.neon" \
+            -x "Altcha/lib/phpunit.xml.dist" \
+            -x "Altcha/lib/CODE_OF_CONDUCT.md" \
+            -x "Altcha/lib/CONTRIBUTING.md"
 
       - name: Create release
         env:
