@@ -37,6 +37,8 @@ git clone --recursive https://github.com/xiedada05/Typecho-Altcha.git
 cp -r Typecho-Altcha/Altcha /path/to/typecho/usr/plugins/
 ```
 
+克隆方式不含前端组件产物(`assets/`,不进仓库):未拉取时插件自动回退到 jsDelivr CDN;想保持零外部请求,在仓库根目录执行 `bash scripts/fetch-assets.sh` 下载即可。
+
 1. 将 `Altcha` 目录放入 `usr/plugins/` 后,在控制台启用插件,HMAC 密钥会自动生成;
 2. 在插件设置中勾选需要保护的场景(评论 / 登录)。
 
@@ -101,13 +103,13 @@ cd Altcha/lib && git checkout vX.Y.Z && cd ..   # 或固定到指定 tag
 git add Altcha/lib && git commit -m "chore: bump altcha-lib"
 ```
 
-打 `v*` tag 推送后,GitHub Actions 会自动构建包含库源码的 Release zip。前端组件(`assets/`,npm 构建产物,非 submodule)更新时替换文件并同步修改 README 与 `Plugin.php` 中的版本号即可。
+打 `v*` tag 推送后,GitHub Actions 会自动组装发布包(拉取 submodule + 执行 `scripts/fetch-assets.sh` 下载前端组件)并创建 Release。前端组件版本单一来源是 `Plugin.php` 的 `WIDGET_VERSION` 常量,升级时改它、重跑 fetch 脚本即可,产物不进仓库。
 
 ## 致谢
 
 - 原插件: [Typecho-Turnstile](https://github.com/NKXingXh/Typecho_Turnstile) (AGPL-3.0) © NKXingXh
 - 服务端库: [altcha-lib-php](https://github.com/altcha-org/altcha-lib-php) (MIT,以 git submodule 引入,发布包内置)
-- 前端组件: [altcha-org/altcha](https://github.com/altcha-org/altcha) v3.2.2 (MIT,已内置于 `assets/`)
+- 前端组件: [altcha-org/altcha](https://github.com/altcha-org/altcha) v3.2.2 (MIT,构建产物不入库,由 CI 打包时组装,版本见 `Plugin.php` 的 `WIDGET_VERSION`)
 
 ## 开发测试
 

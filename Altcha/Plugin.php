@@ -48,6 +48,11 @@ class Plugin implements PluginInterface
     public const PLUGIN_NAME = 'Altcha';
 
     /**
+     * 前端组件版本 (npm: altcha), scripts/fetch-assets.sh 与 CDN 地址均以此为准
+     */
+    public const WIDGET_VERSION = '3.2.2';
+
+    /**
      * 是否启用救援模式
      * 启用后, 将跳过登录验证, 适用于无法通过验证时临时排查问题
      */
@@ -56,12 +61,12 @@ class Plugin implements PluginInterface
     /**
      * CDN 备选脚本 (固定版本, 与本地打包版本一致)
      */
-    private const CDN_BASE = 'https://cdn.jsdelivr.net/npm/altcha@3.2.2/dist/main/';
+    private const CDN_BASE = 'https://cdn.jsdelivr.net/npm/altcha@' . self::WIDGET_VERSION . '/dist/main/';
 
     /**
      * 混淆插件的 CDN 备选地址
      */
-    private const CDN_PLUGINS_BASE = 'https://cdn.jsdelivr.net/npm/altcha@3.2.2/dist/plugins/';
+    private const CDN_PLUGINS_BASE = 'https://cdn.jsdelivr.net/npm/altcha@' . self::WIDGET_VERSION . '/dist/plugins/';
 
     /**
      * 当前页面是否输出过受保护内容 (决定是否加载混淆脚本)
@@ -719,12 +724,21 @@ class Plugin implements PluginInterface
             return self::CDN_BASE . $bundle;
         }
 
+        // git 克隆但未执行 scripts/fetch-assets.sh 时, 本地文件不存在则回退 CDN
+        if (!\is_file(__DIR__ . '/assets/' . $bundle)) {
+            return self::CDN_BASE . $bundle;
+        }
+
         return Common::url('/usr/plugins/' . self::PLUGIN_NAME . '/assets/' . $bundle, Options::alloc()->siteUrl);
     }
 
     private static function obfuscationScriptUrl(): string
     {
         if (self::configValue('scriptSource', 'local') === 'cdn') {
+            return self::CDN_PLUGINS_BASE . 'obfuscation.plugin.min.js';
+        }
+
+        if (!\is_file(__DIR__ . '/assets/obfuscation.plugin.min.js')) {
             return self::CDN_PLUGINS_BASE . 'obfuscation.plugin.min.js';
         }
 

@@ -16,6 +16,9 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Fetch frontend assets
+        run: bash scripts/fetch-assets.sh
+
       - name: Package plugin
         run: |
           zip -r "/tmp/Altcha-${GITHUB_REF_NAME}.zip" Altcha \
