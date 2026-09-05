@@ -131,6 +131,6 @@ php tests/obfuscation.php     # 内容保护: 加解密往返/标记解析/RSS �
 
 ## 许可证
 
-本插件衍生自 [Typecho-Turnstile](https://github.com/NKXingXh/Typecho_Turnstile)(AGPL-3.0)。依据 GNU 对 AGPL-3.0 与 GPLv3 的兼容性条款,本项目整体以 **GPL-3.0-or-later(GPLv3 及更新版本)** 发布,详见 [LICENSE](LICENSE)。ALTCHA 服务端库与前端组件遵循其原始 MIT 许可证(见 `lib/LICENSE.txt` 与 [altcha.org](https://altcha.org))。
+本插件衍生自 [Typecho-Turnstile](https://github.com/NKXingXh/Typecho-Turnstile)(AGPL-3.0)。依据 GNU 对 AGPL-3.0 与 GPLv3 的兼容性条款,本项目整体以 **GPL-3.0-or-later(GPLv3 及更新版本)** 发布,详见 [LICENSE](LICENSE)。ALTCHA 服务端库与前端组件遵循其原始 MIT 许可证(见 `lib/LICENSE.txt` 与 [altcha.org](https://altcha.org))。
 
 Copyright © 2026 xiedada05 (https://github.com/xiedada05)
