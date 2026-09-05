@@ -166,6 +166,17 @@ class Plugin implements PluginInterface
             'disable' => _t('禁用'),
         ], 'enable', _t('自动插入评论验证组件'), _t('禁用后需要在主题 comments.php 的评论表单内自行调用 &lt;?php \TypechoPlugin\Altcha\Plugin::output(); ?&gt;'));
 
+        $xmlrpcBypass = new Radio('xmlrpcBypass', [
+            'enable'  => _t('启用'),
+            'disable' => _t('禁用'),
+        ], 'disable', _t('XML-RPC 豁免 (供合法机器人)'), _t('启用后, 下方名单内的用户通过 XML-RPC (MetaWeblog 博客客户端、第三方 App 等机器人接口) 调用登录与评论时不再要求人机验证 —— 机器人无法完成浏览器工作量证明。'
+            . ' &lt;strong&gt;请务必为这些账号设置强密码, 并遵循最小权限原则: 机器人通常只需要 subscriber / contributor 权限, 不要使用管理员账号, 名单外账号调用 XML-RPC 照常拦截。&lt;/strong&gt; '
+            . '注意: 若站点同时开启了 Typecho 内置的评论反垃圾保护, XML-RPC 评论会被核心拦截, 与本插件无关。'));
+
+        $xmlrpcUsers = new Text('xmlrpcUsers', null, '',
+            _t('XML-RPC 豁免名单'),
+            _t('允许免人机验证的登录用户名, 多个用逗号或换行分隔。名单内账号在网页端操作时照常需要验证, 仅 XML-RPC 调用被豁免。'));
+
         $protectEnable = new Radio('protectEnable', [
             'enable'  => _t('启用'),
             'disable' => _t('禁用'),
@@ -186,6 +197,8 @@ class Plugin implements PluginInterface
         $form->addInput($scriptSource);
         $form->addInput($cdnBase);
         $form->addInput($autoInject);
+        $form->addInput($xmlrpcBypass);
+        $form->addInput($xmlrpcUsers);
         $form->addInput($protectEnable);
         $form->addInput($protectLabel);
         $form->addInput($protectPlaceholder);
@@ -214,6 +227,11 @@ class Plugin implements PluginInterface
     public static function verifyComment(array $comment, $content, array $original): array
     {
         if (!self::enabled('comment') || self::skipForAdmin()) {
+            return $comment;
+        }
+
+        // XML-RPC 豁免: 名单内用户的机器人评论 (需已通过 XML-RPC 认证)
+        if (self::xmlRpcBypassEnabled() && self::isXmlRpcCall() && self::currentUserInXmlRpcList()) {
             return $comment;
         }
 
@@ -341,6 +359,17 @@ class Plugin implements PluginInterface
 
         if (self::RESCUE_MODE || !self::enabled('login')) {
             return $validate();
+        }
+
+        // XML-RPC 请求无法携带工作量证明: 名单内用户凭原生密码校验豁免,
+        // 名单外直接判定失败 (返回 XML fault 而非页面重定向)
+        if (self::isXmlRpcCall()) {
+            if (self::xmlRpcBypassEnabled() && self::xmlRpcLoginAllowed($password)) {
+                return true;
+            }
+
+            error_log('Typecho Altcha plugin: 拒绝了名单外用户的 XML-RPC 登录');
+            return false;
         }
 
         $error = self::checkPayload($_POST['altcha'] ?? '');
@@ -539,6 +568,108 @@ class Plugin implements PluginInterface
     private static function autoInject(): bool
     {
         return self::configValue('autoInject', 'enable') === 'enable';
+    }
+
+    /**
+     * XML-RPC 豁免是否开启
+     */
+    private static function xmlRpcBypassEnabled(): bool
+    {
+        return self::configValue('xmlrpcBypass', 'disable') === 'enable';
+    }
+
+    /**
+     * 当前请求是否为 XML-RPC 调用 (端点固定为 /action/xmlrpc)
+     */
+    private static function isXmlRpcCall(): bool
+    {
+        try {
+            $url = (string) Options::alloc()->request->getRequestUrl();
+        } catch (\Exception $e) {
+            return false;
+        }
+
+        $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+
+        return 1 === preg_match('#/action/xmlrpc/?$#i', $path)
+            || 1 === preg_match('#[?&]action=xmlrpc(&|$)#i', $url);
+    }
+
+    /**
+     * 豁免名单 (登录用户名, 逗号/换行等分隔)
+     *
+     * @return array<string>
+     */
+    private static function xmlRpcUsers(): array
+    {
+        $raw = (string) self::configValue('xmlrpcUsers', '');
+        $users = preg_split('/[\s,;、]+/u', $raw) ?: [];
+
+        return array_values(array_unique(array_filter(array_map('trim', $users))));
+    }
+
+    /**
+     * 当前登录用户是否在豁免名单
+     */
+    private static function currentUserInXmlRpcList(): bool
+    {
+        try {
+            $user = User::alloc();
+        } catch (\Exception $e) {
+            return false;
+        }
+
+        if (!$user->hasLogin()) {
+            return false;
+        }
+
+        return \in_array((string) ($user->name ?? ''), self::xmlRpcUsers(), true);
+    }
+
+    /**
+     * 提取 XML-RPC 认证时正在登录的用户名
+     * (User::login 触发 hashValidate 时用户名仅在调用栈参数中)
+     */
+    private static function xmlRpcLoginName(): ?string
+    {
+        foreach (debug_backtrace(0, 10) as $frame) {
+            if ('login' === ($frame['function'] ?? '')
+                && 'Widget\User' === \ltrim((string) ($frame['class'] ?? ''), '\\')
+                && isset($frame['args'][0])
+                && \is_string($frame['args'][0])) {
+                return $frame['args'][0];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * 校验 XML-RPC 登录是否可以豁免:
+     * 正在登录的用户名必须在名单内, 且凭据通过原生密码校验
+     */
+    private static function xmlRpcLoginAllowed(string $password): bool
+    {
+        $name = self::xmlRpcLoginName();
+
+        if (null === $name || '' === $name || !\in_array($name, self::xmlRpcUsers(), true)) {
+            return false;
+        }
+
+        $row = Db::get()->fetchRow(
+            Db::get()->select()->from('table.users')->where('name = ?', $name)->limit(1)
+        );
+
+        if (empty($row)) {
+            return false;
+        }
+
+        if ('$P$' === substr((string) $row['password'], 0, 3)) {
+            $hasher = new PasswordHash(8, true);
+            return $hasher->checkPassword($password, (string) $row['password']);
+        }
+
+        return Common::hashValidate($password, (string) $row['password']);
     }
 
     /**

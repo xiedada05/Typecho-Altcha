@@ -171,5 +171,97 @@ check('重放 payload 被拒绝 (403)', 403 === $status, "status={$status}");
 check('错误消息为「已被使用」', false !== strpos($body, '已被使用'), msgOf($body));
 
 cleanupTestComments();
+
+// ===== XML-RPC 豁免场景 =====
+
+/** 手工构造 XML-RPC 调用 (支持 string/int/struct), 返回响应原文 */
+function xmlRpcCall(string $method, array $params): string
+{
+    global $baseUrl;
+    $value = function ($v) use (&$value): string {
+        if (is_int($v)) {
+            return '<value><int>' . $v . '</int></value>';
+        }
+        if (is_array($v)) {
+            $members = '';
+            foreach ($v as $k => $item) {
+                $members .= '<member><name>' . htmlspecialchars((string) $k) . '</name>' . $value($item) . '</member>';
+            }
+            return '<value><struct>' . $members . '</struct></value>';
+        }
+        return '<value><string>' . htmlspecialchars((string) $v) . '</string></value>';
+    };
+
+    $xml = '<?xml version="1.0"?><methodCall><methodName>' . htmlspecialchars($method)
+        . '</methodName><params>';
+    foreach ($params as $p) {
+        $xml .= '<param>' . $value($p) . '</param>';
+    }
+    $xml .= '</params></methodCall>';
+
+    $context = stream_context_create(['http' => [
+        'method'  => 'POST',
+        'header'  => "Content-Type: text/xml\r\nUser-Agent: AltchaE2E/1.0\r\n",
+        'content' => $xml,
+        'ignore_errors' => true,
+    ]]);
+    return (string) @file_get_contents($baseUrl . '/index.php/action/xmlrpc', false, $context);
+}
+
+/** 修改插件配置项 (写 options 表 plugin:Altcha JSON) */
+function setPluginConfig(array $kv): void
+{
+    global $db;
+    $row = $db->fetchRow($db->select()->from('table.options')->where('name = ?', 'plugin:Altcha'));
+    $cfg = json_decode((string) $row['value'], true) ?: [];
+    foreach ($kv as $k => $v) {
+        $cfg[$k] = $v;
+    }
+    $db->query($db->update('table.options')
+        ->rows(['value' => json_encode($cfg)])
+        ->where('name = ?', 'plugin:Altcha'));
+}
+
+/** 读/写站点选项 */
+function siteOption(string $name, ?string $value = null): string
+{
+    global $db;
+    if (null !== $value) {
+        $db->query($db->update('table.options')->rows(['value' => $value])->where('name = ?', $name));
+    }
+    $row = $db->fetchRow($db->select()->from('table.options')->where('name = ?', $name));
+    return (string) ($row['value'] ?? '');
+}
+
+$antiSpamBackup = siteOption('commentsAntiSpam');
+
+// 场景⑥: 未开启豁免时, XML-RPC 登录 (无 altcha 字段) 必被拦截
+$resp = xmlRpcCall('blogger.getUsersBlogs', [1, 'admin', 'Altcha#2026@Test']);
+check('未豁免时 XML-RPC 登录被拦截', false !== strpos($resp, '<fault>'), substr($resp, 0, 120));
+
+// 场景⑦: 开启豁免 + 名单含 admin → XML-RPC 登录放行
+setPluginConfig(['xmlrpcBypass' => 'enable', 'xmlrpcUsers' => 'admin']);
+$resp = xmlRpcCall('blogger.getUsersBlogs', [1, 'admin', 'Altcha#2026@Test']);
+check('豁免名单内用户 XML-RPC 登录成功', false === strpos($resp, '<fault>') && false !== strpos($resp, 'blogName'), substr($resp, 0, 120));
+
+// 场景⑧: 豁免用户 XML-RPC 发评论 (需临时关闭核心反垃圾, 见 README 说明)
+siteOption('commentsAntiSpam', '0');
+$resp = xmlRpcCall('wp.newComment', [1, 'admin', 'Altcha#2026@Test', 1, [
+    'comment_author' => 'XMLRPC机器人',
+    'author'         => 'XMLRPC机器人',
+    'content'        => 'XML-RPC 豁免场景测试评论 ' . time(),
+]]);
+check('豁免用户 XML-RPC 评论不被拦截', false === strpos($resp, '<fault>') && false !== strpos($resp, '<int>'), substr($resp, 0, 120));
+siteOption('commentsAntiSpam', $antiSpamBackup);
+
+// 场景⑨: 名单清空 → 豁免失效, XML-RPC 恢复拦截
+setPluginConfig(['xmlrpcUsers' => '']);
+$resp = xmlRpcCall('blogger.getUsersBlogs', [1, 'admin', 'Altcha#2026@Test']);
+check('名单清空后 XML-RPC 恢复拦截', false !== strpos($resp, '<fault>'), substr($resp, 0, 120));
+
+// 还原插件配置与站点状态
+setPluginConfig(['xmlrpcBypass' => 'disable', 'xmlrpcUsers' => '']);
+cleanupTestComments();
+
 echo $failures === 0 ? "\n全部通过\n" : "\n{$failures} 项失败\n";
 exit($failures === 0 ? 0 : 1);
