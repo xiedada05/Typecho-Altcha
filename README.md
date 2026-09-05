@@ -37,7 +37,14 @@ git clone --recursive https://github.com/xiedada05/Typecho-Altcha.git
 cp -r Typecho-Altcha/Altcha /path/to/typecho/usr/plugins/
 ```
 
-克隆方式不含前端组件产物(`assets/`,不进仓库):未拉取时插件自动回退到 jsDelivr CDN;想保持零外部请求,在仓库根目录执行 `bash scripts/fetch-assets.sh` 下载即可。
+克隆方式不含前端组件产物(`assets/`,不进仓库):未拉取时插件自动回退到 CDN,开箱可用;想保持零外部请求,用 PHP 下载一次(Windows 下命令相同,反斜杠路径):
+
+```sh
+php scripts/fetch-assets.php          # Linux / macOS
+php scripts\fetch-assets.php          # Windows (在仓库根目录)
+```
+
+默认从 jsDelivr 官方源下载,网络受限可 `--cdn-base=` 指定镜像,如:`php scripts/fetch-assets.php --cdn-base=https://registry.npmmirror.com/altcha/3.2.2/files/dist`。
 
 1. 将 `Altcha` 目录放入 `usr/plugins/` 后,在控制台启用插件,HMAC 密钥会自动生成;
 2. 在插件设置中勾选需要保护的场景(评论 / 登录)。
@@ -87,7 +94,8 @@ cp -r Typecho-Altcha/Altcha /path/to/typecho/usr/plugins/
 | 验证难度 | 低 / 中 / 高,越高对机器人越昂贵,对访客设备要求也越高 |
 | 挑战有效期 | 默认 15 分钟,过期挑战会被拒绝 |
 | 外观主题 / 组件语言 | 亮暗主题与多语言界面(i18n 内置,默认跟随浏览器语言) |
-| 组件脚本来源 | 本地打包(默认,零外部请求)/ jsDelivr CDN |
+| 组件脚本来源 | 本地打包(默认,零外部请求)/ CDN;git 克隆部署未拉取产物时自动回退 CDN |
+| 自定义 CDN 地址 | 组件脚本来源为 CDN 时使用,留空为官方 jsDelivr 源;填到 altcha 包的 `dist` 一级即可接 npmmirror、自建反代等镜像 |
 | 自动插入评论组件 | 关闭后需主题手动调用 `output()` |
 | 内容保护 | 启用/禁用 `<altcha-protect>` 内容加密(默认启用) |
 | 保护内容按钮文案 | 占位按钮的全局默认文案,可用 `label` 属性覆盖 |
@@ -103,7 +111,7 @@ cd Altcha/lib && git checkout vX.Y.Z && cd ..   # 或固定到指定 tag
 git add Altcha/lib && git commit -m "chore: bump altcha-lib"
 ```
 
-打 `v*` tag 推送后,GitHub Actions 会自动组装发布包(拉取 submodule + 执行 `scripts/fetch-assets.sh` 下载前端组件)并创建 Release。前端组件版本单一来源是 `Plugin.php` 的 `WIDGET_VERSION` 常量,升级时改它、重跑 fetch 脚本即可,产物不进仓库。
+打 `v*` tag 推送后,GitHub Actions 会自动组装发布包(拉取 submodule + `php scripts/fetch-assets.php` 下载前端组件)并创建 Release。前端组件版本单一来源是 `Plugin.php` 的 `WIDGET_VERSION` 常量,升级时改它、重跑 fetch 脚本即可,产物不进仓库。
 
 ## 致谢
 

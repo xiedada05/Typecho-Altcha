@@ -59,14 +59,9 @@ class Plugin implements PluginInterface
     private const RESCUE_MODE = false;
 
     /**
-     * CDN 备选脚本 (固定版本, 与本地打包版本一致)
+     * 默认前端组件 CDN (可在插件设置中自定义, 需填到 altcha 包的 dist 一级)
      */
-    private const CDN_BASE = 'https://cdn.jsdelivr.net/npm/altcha@' . self::WIDGET_VERSION . '/dist/main/';
-
-    /**
-     * 混淆插件的 CDN 备选地址
-     */
-    private const CDN_PLUGINS_BASE = 'https://cdn.jsdelivr.net/npm/altcha@' . self::WIDGET_VERSION . '/dist/plugins/';
+    private const DEFAULT_CDN_DIST = 'https://cdn.jsdelivr.net/npm/altcha@' . self::WIDGET_VERSION . '/dist';
 
     /**
      * 当前页面是否输出过受保护内容 (决定是否加载混淆脚本)
@@ -160,7 +155,11 @@ class Plugin implements PluginInterface
         $scriptSource = new Radio('scriptSource', [
             'local' => _t('本地打包'),
             'cdn'   => _t('CDN'),
-        ], 'local', _t('组件脚本来源'), _t('本地打包时验证流程不产生任何第三方网络请求'));
+        ], 'local', _t('组件脚本来源'), _t('本地打包时验证流程不产生任何第三方网络请求; git 克隆部署且未执行资产下载脚本时自动回退 CDN'));
+
+        $cdnBase = new Text('cdnBase', null, '',
+            _t('自定义 CDN 地址'),
+            _t('组件脚本来源为 CDN (含自动回退) 时使用, 留空为官方源 jsDelivr。填写到 altcha 包的 dist 一级, 末尾斜杠可省略, 例如: https://registry.npmmirror.com/altcha/3.2.2/files/dist 。版本号需与组件版本一致 (当前 ' . self::WIDGET_VERSION . '), 可用镜像: jsDelivr / npmmirror / 自建反代'));
 
         $autoInject = new Radio('autoInject', [
             'enable'  => _t('启用'),
@@ -185,6 +184,7 @@ class Plugin implements PluginInterface
         $form->addInput($theme);
         $form->addInput($language);
         $form->addInput($scriptSource);
+        $form->addInput($cdnBase);
         $form->addInput($autoInject);
         $form->addInput($protectEnable);
         $form->addInput($protectLabel);
@@ -714,19 +714,26 @@ class Plugin implements PluginInterface
         return Common::url('/action/altcha', Options::alloc()->index);
     }
 
+    /**
+     * 前端组件 CDN 地址: 优先取插件设置中的自定义地址, 未配置时用官方 jsDelivr 源
+     */
+    private static function cdnDistBase(): string
+    {
+        $custom = trim((string) self::configValue('cdnBase', ''));
+
+        return '' !== $custom ? rtrim($custom, '/') : self::DEFAULT_CDN_DIST;
+    }
+
     private static function scriptUrl(): string
     {
         // i18n 版内置多语言翻译, auto 模式下组件按浏览器语言自动切换;
         // en 使用主包 (默认英文, 体积更小)
         $bundle = 'en' === self::configValue('language', 'auto') ? 'altcha.min.js' : 'altcha.i18n.min.js';
 
-        if (self::configValue('scriptSource', 'local') === 'cdn') {
-            return self::CDN_BASE . $bundle;
-        }
-
-        // git 克隆但未执行 scripts/fetch-assets.sh 时, 本地文件不存在则回退 CDN
-        if (!\is_file(__DIR__ . '/assets/' . $bundle)) {
-            return self::CDN_BASE . $bundle;
+        // git 克隆但未执行 scripts/fetch-assets.php 时, 本地文件不存在则回退 CDN
+        if (self::configValue('scriptSource', 'local') === 'cdn'
+            || !\is_file(__DIR__ . '/assets/' . $bundle)) {
+            return self::cdnDistBase() . '/main/' . $bundle;
         }
 
         return Common::url('/usr/plugins/' . self::PLUGIN_NAME . '/assets/' . $bundle, Options::alloc()->siteUrl);
@@ -734,12 +741,9 @@ class Plugin implements PluginInterface
 
     private static function obfuscationScriptUrl(): string
     {
-        if (self::configValue('scriptSource', 'local') === 'cdn') {
-            return self::CDN_PLUGINS_BASE . 'obfuscation.plugin.min.js';
-        }
-
-        if (!\is_file(__DIR__ . '/assets/obfuscation.plugin.min.js')) {
-            return self::CDN_PLUGINS_BASE . 'obfuscation.plugin.min.js';
+        if (self::configValue('scriptSource', 'local') === 'cdn'
+            || !\is_file(__DIR__ . '/assets/obfuscation.plugin.min.js')) {
+            return self::cdnDistBase() . '/plugins/obfuscation.plugin.min.js';
         }
 
         return Common::url('/usr/plugins/' . self::PLUGIN_NAME . '/assets/obfuscation.plugin.min.js', Options::alloc()->siteUrl);
