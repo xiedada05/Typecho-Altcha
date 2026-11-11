@@ -8,9 +8,21 @@ require __DIR__ . '/../Altcha/autoload.php';
 
 // Plugin.php 带 ROOT_DIR 守卫, CLI 下需模拟定义并显式加载
 if (!defined('__TYPECHO_ROOT_DIR__')) {
-    define('__TYPECHO_ROOT_DIR__', '/');
+    define('__TYPECHO_ROOT_DIR__', dirname(__DIR__) . '/../typecho/');
 }
-// CLI 无 Typecho 环境, stub 插件接口
+
+// 轻量 PSR-4 加载 Typecho 类 (仅类定义, 不启动框架):
+// Plugin.php 顶部 require 了 Form/Range.php, 后者继承 Typecho 表单元素
+if (!class_exists('Typecho\Common')) {
+    \spl_autoload_register(function (string $class): void {
+        $file = __TYPECHO_ROOT_DIR__ . 'var/' . \str_replace('\\', '/', $class) . '.php';
+        if (\is_file($file)) {
+            require $file;
+        }
+    });
+}
+
+// Typecho 类不可用时退回 stub 插件接口
 if (!interface_exists('Typecho\Plugin\PluginInterface')) {
     eval('namespace Typecho\Plugin; interface PluginInterface {}');
 }

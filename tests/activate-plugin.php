@@ -49,7 +49,8 @@ $db->query($db->update('table.options')
 \Widget\Plugins\Edit::configPlugin('Altcha', [
     'hmacSecret'    => bin2hex(random_bytes(32)),
     'enableActions' => ['comment', 'login'],
-    'difficulty'    => 'middle',
+    'difficulty'    => 2000,
+    'algorithm'     => 'PBKDF2/SHA-256',
     'expire'        => 15,
     'theme'         => 'auto',
     'language'      => 'auto',

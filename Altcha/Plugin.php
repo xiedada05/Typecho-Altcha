@@ -7,7 +7,7 @@
  *
  * @package Altcha
  * @author xiedada05
- * @version 2.0.0
+ * @version 2.0.1
  * @link https://github.com/xiedada05/Typecho-Altcha
  * @license https://www.gnu.org/licenses/gpl-3.0.html GPL-3.0-or-later
  */
@@ -15,10 +15,16 @@
 namespace TypechoPlugin\Altcha;
 
 require_once __DIR__ . '/autoload.php';
+require_once __DIR__ . '/Form/Range.php';
 
+use AltchaOrg\Altcha\Algorithm\DeriveKeyInterface;
 use AltchaOrg\Altcha\Algorithm\Pbkdf2;
+use AltchaOrg\Altcha\Algorithm\Sha;
+use AltchaOrg\Altcha\Algorithm\ShaAlgorithm;
 use AltchaOrg\Altcha\Altcha;
+use AltchaOrg\Altcha\HmacAlgorithm;
 use AltchaOrg\Altcha\Obfuscator;
+use AltchaOrg\Altcha\Payload;
 use AltchaOrg\Altcha\VerifySolutionOptions;
 use Typecho\Common;
 use Typecho\Config;
@@ -28,7 +34,9 @@ use Typecho\Widget\Helper\Form;
 use Typecho\Widget\Helper\Form\Element\Checkbox;
 use Typecho\Widget\Helper\Form\Element\Number;
 use Typecho\Widget\Helper\Form\Element\Radio;
+use Typecho\Widget\Helper\Form\Element\Select;
 use Typecho\Widget\Helper\Form\Element\Text;
+use TypechoPlugin\Altcha\Form\Range;
 use Utils\PasswordHash;
 use Widget\Notice;
 use Widget\Options;
@@ -132,11 +140,23 @@ class Plugin implements PluginInterface
             'login'   => _t('登录'),
         ], ['comment'], _t('在哪些地方启用验证'), _t('启用评论验证后无需修改主题模板, 组件会自动插入评论表单'));
 
-        $difficulty = new Radio('difficulty', [
-            'low'    => _t('低'),
-            'middle' => _t('中'),
-            'high'   => _t('高'),
-        ], 'middle', _t('验证难度'), _t('越高对机器人越昂贵, 对访客设备的要求也越高'));
+        $difficulty = new Range('difficulty', [
+            'min'  => 500,
+            'max'  => 20000,
+            'step' => 100,
+        ], 2000, _t('验证难度 (滑块)'), _t('求解时每次尝试的计算成本: PBKDF2 系列为迭代次数, SHA 系列为哈希轮数 (相同数值下 SHA 明显更轻快)。范围 500 ~ 20000, 默认 2000 相当于旧版「中」档 (低=800 / 高=10000), 越高对机器人越昂贵, 对访客设备的要求也越高。'));
+
+        $algorithmLabels = [
+            'PBKDF2/SHA-256' => _t('PBKDF2/SHA-256 (默认, 推荐)'),
+            'PBKDF2/SHA-384' => _t('PBKDF2/SHA-384'),
+            'PBKDF2/SHA-512' => _t('PBKDF2/SHA-512'),
+            'SHA-256'        => _t('SHA-256 (最轻量)'),
+            'SHA-384'        => _t('SHA-384'),
+            'SHA-512'        => _t('SHA-512'),
+        ];
+
+        $algorithm = new Select('algorithm', $algorithmLabels, 'PBKDF2/SHA-256', _t('哈希算法'),
+            _t('签发挑战与浏览器解题使用的哈希算法。前端组件支持 SHA 与 PBKDF2 系列; 相同难度下 PBKDF2 每次尝试更昂贵, SHA 系列对低端设备更友好。修改后新挑战立即生效, 已下发的旧挑战按其自身参数校验, 不受影响。'));
 
         $expire = new Number('expire', null, 15, _t('挑战有效期 (分钟)'), _t('超过时限的挑战将被判定为过期'));
 
@@ -191,6 +211,7 @@ class Plugin implements PluginInterface
         $form->addInput($secret);
         $form->addInput($enableActions);
         $form->addInput($difficulty);
+        $form->addInput($algorithm);
         $form->addInput($expire);
         $form->addInput($theme);
         $form->addInput($language);
@@ -507,20 +528,62 @@ class Plugin implements PluginInterface
     }
 
     /**
-     * 难度预设: [PBKDF2 迭代成本, 初始 counter, 前缀字节数]
+     * 难度参数: [单次推导成本, 前缀字节数]
+     * 滑块存数值成本; 兼容旧版字符串预设 (low/middle/high)。
      * 客户端期望尝试次数约为 2^(8*前缀字节数) / 2
+     *
+     * 注意: 此处刻意不生成「初始 counter」。签发时一旦传入 counter,
+     * createChallenge() 会发布服务端预先算好的解答 keySignature,
+     * verifySolution() 随之启用不校验 counter 的快路径, 使同一挑战存在
+     * 无限多个可独立通过验证的解答 (BUG-R2-C1-A1-H2 的根因)。
+     * 不传 counter 时 createChallenge() 会为 keyPrefix 生成随机前缀,
+     * 快路径不会被启用, 每次签发仍要求客户端完成一次真实 PoW。
      */
-    public static function difficultyParams(string $difficulty): array
+    public static function difficultyParams($difficulty): array
     {
-        switch ($difficulty) {
-            case 'low':
-                return [800, random_int(500, 1500), 1];
-            case 'high':
-                return [10000, random_int(5000, 15000), 1];
-            case 'middle':
-            default:
-                return [2000, random_int(1000, 3000), 1];
-        }
+        $cost = match (true) {
+            'low' === $difficulty    => 800,
+            'middle' === $difficulty => 2000,
+            'high' === $difficulty   => 10000,
+            is_numeric($difficulty)  => (int) $difficulty,
+            default                  => 2000,
+        };
+
+        $cost = min(20000, max(500, $cost));
+
+        return [$cost, 1];
+    }
+
+    /**
+     * 可选哈希算法 (前端 altcha 组件可在浏览器内求解的全部算法)
+     *
+     * @return array<string>
+     */
+    public static function supportedAlgorithms(): array
+    {
+        return [
+            'PBKDF2/SHA-256',
+            'PBKDF2/SHA-384',
+            'PBKDF2/SHA-512',
+            'SHA-256',
+            'SHA-384',
+            'SHA-512',
+        ];
+    }
+
+    /**
+     * 算法名 → 密钥推导实现, 未知名称回退默认 PBKDF2/SHA-256
+     */
+    public static function algorithm(?string $name): DeriveKeyInterface
+    {
+        return match ($name) {
+            'PBKDF2/SHA-384' => new Pbkdf2(HmacAlgorithm::SHA384),
+            'PBKDF2/SHA-512' => new Pbkdf2(HmacAlgorithm::SHA512),
+            'SHA-256'        => new Sha(ShaAlgorithm::SHA256),
+            'SHA-384'        => new Sha(ShaAlgorithm::SHA384),
+            'SHA-512'        => new Sha(ShaAlgorithm::SHA512),
+            default          => new Pbkdf2(HmacAlgorithm::SHA256),
+        };
     }
 
     public static function expireSeconds($minutes): int
@@ -589,10 +652,22 @@ class Plugin implements PluginInterface
             return false;
         }
 
+        return self::isXmlRpcUrl($url);
+    }
+
+    /**
+     * 按 URL 路径判断是否为 XML-RPC 端点
+     *
+     * 只按路径判定。查询串完全由客户端控制, 而 Typecho 路由只匹配
+     * getPathInfo() (已剥离查询串), 因此 <permalink>/comment?action=xmlrpc
+     * 仍然是一条普通网页评论; 若让查询串参与判定, 名单内账号只需附加该参数
+     * 即可跳过 PoW (BUG-R2-C2-A1-H1)。
+     */
+    private static function isXmlRpcUrl(string $url): bool
+    {
         $path = (string) (parse_url($url, PHP_URL_PATH) ?? '');
 
-        return 1 === preg_match('#/action/xmlrpc/?$#i', $path)
-            || 1 === preg_match('#[?&]action=xmlrpc(&|$)#i', $url);
+        return 1 === preg_match('#/action/xmlrpc/?$#i', $path);
     }
 
     /**
@@ -675,26 +750,29 @@ class Plugin implements PluginInterface
     /**
      * 校验提交的 payload
      *
-     * @param string|null $payload
+     * @param mixed $payload POST 字段, 只接受字符串 (数组型 altcha[] 不能绕过, 也不能触发 500)
      * @return string|null 错误消息; null 表示验证通过
      */
-    private static function checkPayload(?string $payload): ?string
+    private static function checkPayload($payload): ?string
     {
         $secret = self::configValue('hmacSecret', '');
         if (empty($secret)) {
             return '插件尚未配置 HMAC 密钥, 请在后台重新保存插件设置';
         }
 
-        if (empty($payload)) {
+        if (!\is_string($payload) || '' === $payload) {
             return '请先完成人机验证';
         }
 
         $altcha = new Altcha($secret, $secret);
 
+        // 按挑战自身声明的算法校验: 挑战参数已被 HMAC 签名无法伪造,
+        // 且后台切换算法后已下发的旧挑战仍能按原参数通过验证
         try {
+            $decoded = Payload::fromBase64($payload);
             $result = $altcha->verifySolution(new VerifySolutionOptions(
                 payload: $payload,
-                algorithm: new Pbkdf2(),
+                algorithm: self::algorithm($decoded->challenge->parameters->algorithm),
             ));
         } catch (\InvalidArgumentException $e) {
             return '人机验证数据无效, 请刷新页面重试';
@@ -710,19 +788,45 @@ class Plugin implements PluginInterface
             return '人机验证未通过, 请重试';
         }
 
-        // 防重放: 同一 payload 只允许成功提交一次 (主键抢占, 并发安全)
-        return self::consumePayload($payload, self::expireSeconds(self::configValue('expire', 15)));
+        // 防重放必须以「挑战」为单位消费, 而不是原始 POST 字节或单一解答:
+        // - 同一解答存在无限种等价字节编码 (solution.time / 未知键 / 键序 / 空白 /
+        //   \uXXXX 转义), 直接哈希原始字符串会让每次重放都得到新主键 (BUG-R2-C1-A1-H1);
+        // - 同一挑战也存在海量等价解答 (快路径不校验 counter; 全量路径下约 2^24 个
+        //   counter 满足 1 字节前缀), 对「解答」哈希同样挡不住第二次提交 (BUG-R2-C1-A1-H2)。
+        // 每次下发都使用全新 random_bytes(16) nonce/salt, 挑战签名因此逐次唯一,
+        // sha256(挑战签名) 才是正确的「一次下发一次动作」指纹。
+        $challengeSignature = $decoded->challenge->signature;
+        if (null === $challengeSignature || '' === $challengeSignature) {
+            // 配置了 HMAC 密钥时, 验签通过必然带签名; 此处仅为防御性兜底
+            return '人机验证未通过, 请重试';
+        }
+
+        // 记录 TTL 取挑战自身已签名的 expiresAt, 而不是当前后台配置:
+        // 否则管理员在挑战有效期内调小 expire 时, 防重放记录会早于挑战失效被清理,
+        // 从而留下可重放的窗口。
+        $expiresAt = $decoded->challenge->parameters->expiresAt;
+        $ttl = null !== $expiresAt
+            ? max(1, $expiresAt - time() + 1)
+            : self::expireSeconds(self::configValue('expire', 15));
+
+        return self::consumePayload($challengeSignature, $ttl);
     }
 
     /**
-     * 消费一次验证解答: 首次插入成功放行, 主键冲突视为重放
+     * 消费一次挑战: 首次插入成功放行, 主键冲突视为重放
      *
+     * 指纹基于挑战签名 (每次签发唯一), 与提交字节及解答数量无关。
+     * 存储层异常必须 fail-closed: 放行等于跳过防重放校验。SQLite 的
+     * SQLITE_BUSY ("database is locked", code 5) 可被未认证的 trackback
+     * 写入压力诱发, 且不会命中重复键判定 (BUG-R2-C2-A2-H1)。
+     *
+     * @param string $challengeSignature 已验证通过的挑战签名
      * @return string|null 错误消息; null 表示首次使用
      */
-    private static function consumePayload(string $payload, int $ttl): ?string
+    private static function consumePayload(string $challengeSignature, int $ttl): ?string
     {
         $db = Db::get();
-        $fingerprint = hash('sha256', $payload);
+        $fingerprint = hash('sha256', 'altcha-challenge-v1|' . $challengeSignature);
 
         try {
             // 机会性清理过期记录
@@ -754,12 +858,13 @@ class Plugin implements PluginInterface
                     }
                 }
 
-                self::logStorageError('写入防重放记录失败', $e);
-                return null; // fail-open: 存储异常不应阻断全部评论
+                self::logStorageError('写入防重放记录失败 (fail-closed)', $e);
+                return '验证服务暂时不可用, 请稍后重试';
             }
         }
 
-        return null;
+        // 理论不可达: 两次尝试均已有明确返回; 保持 fail-closed 语义
+        return '验证服务暂时不可用, 请稍后重试';
     }
 
     /**

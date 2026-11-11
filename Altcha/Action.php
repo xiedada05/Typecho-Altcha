@@ -3,7 +3,6 @@
 namespace TypechoPlugin\Altcha;
 
 use AltchaOrg\Altcha\Altcha;
-use AltchaOrg\Altcha\Algorithm\Pbkdf2;
 use AltchaOrg\Altcha\CreateChallengeOptions;
 use Widget\ActionInterface;
 use Widget\Base;
@@ -54,14 +53,17 @@ class Action extends Base implements ActionInterface
             $this->response->throwJson(['error' => 'ALTCHA 插件尚未配置 HMAC 密钥, 请在后台重新保存插件设置']);
         }
 
-        [$cost, $counter, $keyPrefixLength] = Plugin::difficultyParams($options->difficulty);
+        [$cost, $keyPrefixLength] = Plugin::difficultyParams($options->difficulty);
 
         $altcha = new Altcha($secret, $secret);
         $challenge = $altcha->createChallenge(new CreateChallengeOptions(
-            algorithm: new Pbkdf2(),
+            algorithm: Plugin::algorithm($options->algorithm ?? null),
             cost: $cost,
+            // 不传 counter: 传入时库会发布 keySignature 并启用「不校验 counter」的
+            // 验证快路径, 使同一挑战存在无限多个可独立通过验证的解答。
+            // 传空 keyPrefix 让库生成随机前缀, 快路径不启用, 每次签发都要求真实 PoW。
+            keyPrefix: '',
             keyPrefixLength: $keyPrefixLength,
-            counter: $counter,
             expiresAt: time() + Plugin::expireSeconds($options->expire),
         ));
 
